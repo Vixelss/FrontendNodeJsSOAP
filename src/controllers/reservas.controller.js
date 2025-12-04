@@ -1,5 +1,5 @@
 // src/controllers/reservas.controller.js
-const apiClient = require('../services/apiClientRest');
+const apiClient = require('../services/apiClientSoap');
 const bancoClient = require('../services/bancoClient');
 
 // ===============================

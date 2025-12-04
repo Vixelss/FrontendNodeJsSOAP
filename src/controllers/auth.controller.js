@@ -1,5 +1,6 @@
 // src/controllers/auth.controller.js
-const apiClient = require('../services/apiClientRest');
+const apiClient = require('../services/apiClientSoap');
+
 
 // =======================
 // GET /login

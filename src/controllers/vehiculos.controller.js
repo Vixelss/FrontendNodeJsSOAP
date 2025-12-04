@@ -1,6 +1,7 @@
 // src/controllers/vehiculos.controller.js
 
-const apiClient = require('../services/apiClientRest');
+const apiClient = require('../services/apiClientSoap');
+
 
 const listarVehiculos = async (req, res) => {
   try {

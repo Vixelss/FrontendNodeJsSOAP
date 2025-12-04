@@ -1,5 +1,5 @@
 // src/controllers/admin.controller.js
-const apiClient = require('../services/apiClientRest');
+const apiClient = require('../services/apiClientSoap');
 
 // =======================
 // Middleware: solo admins

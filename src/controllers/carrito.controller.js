@@ -1,6 +1,30 @@
 // src/controllers/carrito.controller.js
 
-const apiClient = require('../services/apiClientRest');
+const apiClient = require('../services/apiClientSoap');
+
+// =======================
+// Helpers para la sesión
+// =======================
+function getIdUsuarioFromSession(req) {
+  const u = req.session.usuario || {};
+  return (
+    u.id ||
+    u.IdUsuario ||
+    u.idUsuario ||
+    u.Id ||
+    null
+  );
+}
+
+function getIdCarritoFromSession(req) {
+  const u = req.session.usuario || {};
+  return (
+    req.session.carritoId ||
+    u.IdCarrito ||
+    u.idCarrito ||
+    null
+  );
+}
 
 // =======================
 // Ver carrito
@@ -8,74 +32,59 @@ const apiClient = require('../services/apiClientRest');
 const verCarrito = async (req, res) => {
   if (!req.session.usuario) {
     return res.render('auth/login', {
-      titulo: 'Iniciar sesión',
+      titulo: 'Iniciar sesion',
       error: null,
       mensajeInfo: 'Inicia sesion para ver tu carrito.',
       returnUrl: '/carrito'
     });
   }
 
-  let carritoId = req.session.carritoId || null;
   const usuario = req.session.usuario;
+  const idUsuario = getIdUsuarioFromSession(req);
 
   try {
-    // 1) Si no tengo carritoId en sesion, lo busco en la API por usuario
-    if (!carritoId && usuario) {
-      const idUsuario =
-        usuario.id ||
-        usuario.IdUsuario ||
-        usuario.idUsuario ||
-        usuario.Id;
+    // Pedimos el carrito directamente por usuario al WS SOAP
+    const dataCarrito = await apiClient.getCarritoPorUsuario(idUsuario);
 
-      if (idUsuario) {
-        const dataCarrito = await apiClient.getCarritoPorUsuario(idUsuario);
-        if (dataCarrito) {
-          carritoId =
-            dataCarrito.idCarrito ||
-            dataCarrito.IdCarrito ||
-            carritoId;
-
-          if (carritoId) {
-            req.session.carritoId = carritoId;
-          }
-        }
-      }
-    }
-
-    // 2) Si tengo carritoId, pido el detalle
     let items = [];
-    let total = 0;
+    let subtotal = 0;
 
-    if (carritoId) {
-      const detalle = await apiClient.obtenerDetalleCarrito(carritoId);
+    if (dataCarrito) {
+      // Guardar IdCarrito en sesion para otras operaciones (reservas, etc.)
+      req.session.carritoId =
+        dataCarrito.IdCarrito || dataCarrito.idCarrito || null;
 
-      items = Array.isArray(detalle)
-        ? detalle
-        : detalle.items || detalle.Items || [];
+      const nodeItems = dataCarrito.Items || [];
+      items = Array.isArray(nodeItems) ? nodeItems : [nodeItems];
 
-      total = items.reduce((acc, it) => {
-        const sub =
-          it.subtotal ??
-          it.Subtotal ??
-          it.totalItem ??
-          0;
+      subtotal = items.reduce((acc, it) => {
+        const sub = it.Subtotal ?? it.subtotal ?? it.totalItem ?? 0;
         return acc + Number(sub);
       }, 0);
     }
 
+    const iva = +(subtotal * 0.12).toFixed(2);
+    const total = +(subtotal + iva).toFixed(2);
+
     return res.render('carrito/index', {
       titulo: 'Tu carrito',
       items,
+      subtotal,
+      iva,
       total,
-      error: null
+      error: null,
+      usuario
     });
   } catch (err) {
     console.error('Error al ver carrito:', err);
     return res.status(500).render('carrito/index', {
       titulo: 'Tu carrito',
       items: [],
+      subtotal: 0,
+      iva: 0,
       total: 0,
-      error: 'No se pudo cargar el carrito.'
+      error: 'No se pudo cargar el carrito.',
+      usuario
     });
   }
 };
@@ -84,7 +93,6 @@ const verCarrito = async (req, res) => {
 // Agregar item al carrito
 // =======================
 const agregarItem = async (req, res) => {
-  // 0) Si no está logueado, devolvemos 401 para que el front redirija
   if (!req.session.usuario) {
     return res.status(401).json({
       ok: false,
@@ -102,175 +110,58 @@ const agregarItem = async (req, res) => {
     });
   }
 
-  // Normalizamos datos
   const idVehiculoNum = parseInt(idVehiculo, 10);
   fechaInicio = String(fechaInicio).substring(0, 10); // YYYY-MM-DD
   fechaFin = String(fechaFin).substring(0, 10);       // YYYY-MM-DD
 
-  const usuario = req.session.usuario;
-  const idUsuario =
-    usuario.id ||
-    usuario.IdUsuario ||
-    usuario.idUsuario ||
-    usuario.Id;
+  const idUsuario = getIdUsuarioFromSession(req);
 
   try {
-    // =====================================================
-    // 1) Evitar duplicados y solapes de fechas
-    // =====================================================
-    let carritoId = req.session.carritoId || null;
-
-    // Si no tengo carritoId en sesión, intento buscarlo por usuario (igual que en verCarrito)
-    if (!carritoId && idUsuario) {
-      try {
-        const dataCarrito = await apiClient.getCarritoPorUsuario(idUsuario);
-        if (dataCarrito) {
-          carritoId =
-            dataCarrito.idCarrito ||
-            dataCarrito.IdCarrito ||
-            carritoId;
-
-          if (carritoId) {
-            req.session.carritoId = carritoId;
-          }
-        }
-      } catch (e) {
-        console.error(
-          'Error buscando carrito por usuario (prevalidacion):',
-          e.response?.data || e.message
-        );
-      }
-    }
-
-    if (carritoId) {
-      try {
-        const detalle = await apiClient.obtenerDetalleCarrito(carritoId);
-
-        const items = Array.isArray(detalle)
-          ? detalle
-          : detalle.items || detalle.Items || [];
-
-        const yaExiste = items.some((it) => {
-          const vehId =
-            it.IdVehiculo ||
-            it.idVehiculo ||
-            it.VehiculoId ||
-            it.id_vehiculo ||
-            it.vehiculoId;
-
-          const ini = (
-            it.FechaInicio ||
-            it.fechaInicio ||
-            it.fecha_inicio ||
-            it.FechaInicioReserva ||
-            it.fechaInicioReserva ||
-            ''
-          ).toString().substring(0, 10); // YYYY-MM-DD
-
-          const fin = (
-            it.FechaFin ||
-            it.fechaFin ||
-            it.fecha_fin ||
-            it.FechaFinReserva ||
-            it.fechaFinReserva ||
-            ''
-          ).toString().substring(0, 10); // YYYY-MM-DD
-
-          // Rango existente: [ini, fin]
-          // Rango nuevo:     [fechaInicio, fechaFin]
-          //
-          // Hay solape SI NO se cumple:
-          //   nuevoFin < ini  (nuevo entero antes)
-          //   ó
-          //   nuevoInicio > fin (nuevo empieza después)
-          //
-          // Usamos comparación de strings porque todas son YYYY-MM-DD.
-          const seSolapan = !(
-            fechaFin < ini || fechaInicio > fin
-          );
-
-          return Number(vehId) === idVehiculoNum && seSolapan;
-        });
-
-        if (yaExiste) {
-          return res.status(400).json({
-            ok: false,
-            mensaje:
-              'Ya tienes este vehiculo en tu carrito en fechas que se cruzan con las seleccionadas.'
-          });
-        }
-      } catch (e) {
-        console.error(
-          'Error revisando items del carrito antes de agregar:',
-          e.response?.data || e.message
-        );
-        // Si falla esta validación, no bloqueamos el flujo: dejamos que la API decida
-      }
-    }
-
-    // ====================================
-    // 2) Llamar a la API para agregar item
-    // ====================================
+    // 1) Llamar al WS SOAP para agregar el item
     const resultado = await apiClient.agregarItemCarrito({
-      idUsuario,
-      idVehiculo: idVehiculoNum,
-      fechaInicio,
-      fechaFin
+      IdUsuario: idUsuario,
+      IdVehiculo: idVehiculoNum,
+      FechaInicio: fechaInicio,
+      FechaFin: fechaFin
     });
 
-    // Actualizar / guardar carritoId en sesión
-    let nuevoCarritoId = req.session.carritoId || null;
+    // 2) Volver a leer el carrito por usuario para actualizar idCarrito e items
+    const dataCarrito = await apiClient.getCarritoPorUsuario(idUsuario);
 
-    if (resultado) {
-      if (typeof resultado === 'number') {
-        nuevoCarritoId = resultado;
-      } else {
-        nuevoCarritoId =
-          resultado.idCarrito ||
-          resultado.IdCarrito ||
-          resultado.carritoId ||
-          resultado.CarritoId ||
-          nuevoCarritoId;
+    let carritoId = null;
+    if (dataCarrito) {
+      carritoId = dataCarrito.IdCarrito || dataCarrito.idCarrito || null;
+      if (carritoId) {
+        req.session.carritoId = carritoId;
       }
-    }
-
-    if (nuevoCarritoId) {
-      req.session.carritoId = nuevoCarritoId;
     }
 
     return res.json({
       ok: true,
-      mensaje: 'Vehiculo agregado al carrito correctamente.',
-      carritoId: nuevoCarritoId
+      mensaje: resultado?.mensaje || 'Vehiculo agregado al carrito correctamente.',
+      carritoId: carritoId
     });
   } catch (err) {
-    console.error(
-      'Error al agregar al carrito:',
-      err.response?.data || err.message
-    );
+    console.error('Error al agregar al carrito:', err);
 
-    // Mensaje "bonito" según lo que devuelva la API
     let mensaje =
       'No se pudo agregar el vehiculo al carrito. Intentalo nuevamente.';
 
-    const dataErr = err.response?.data;
-    if (dataErr) {
-      const texto = JSON.stringify(dataErr).toLowerCase();
+    const texto = (err.message || err.toString() || '').toLowerCase();
 
-      if (texto.includes('no esta disponible') || texto.includes('no está disponible')) {
-        mensaje =
-          'Ese vehiculo no esta disponible en las fechas seleccionadas. Prueba con otras fechas.';
-      } else if (texto.includes('mantenimiento')) {
-        mensaje =
-          'Ese vehiculo esta en mantenimiento para esas fechas.';
-      } else if (
-        texto.includes('datos invalidos') ||
-        texto.includes('datos inválidos') ||
-        texto.includes('modelo invalido')
-      ) {
-        mensaje =
-          'Los datos de la reserva no son validos. Revisa las fechas seleccionadas.';
-      }
+    if (texto.includes('no esta disponible') || texto.includes('no está disponible')) {
+      mensaje =
+        'Ese vehiculo no esta disponible en las fechas seleccionadas. Prueba con otras fechas.';
+    } else if (texto.includes('mantenimiento')) {
+      mensaje =
+        'Ese vehiculo esta en mantenimiento para esas fechas.';
+    } else if (
+      texto.includes('datos invalidos') ||
+      texto.includes('datos inválidos') ||
+      texto.includes('modelo invalido')
+    ) {
+      mensaje =
+        'Los datos de la reserva no son validos. Revisa las fechas seleccionadas.';
     }
 
     return res.status(400).json({
@@ -284,12 +175,10 @@ const agregarItem = async (req, res) => {
 // Eliminar item del carrito
 // =======================
 const eliminarItem = async (req, res) => {
-  // Si no esta logueado, lo mandamos al login
   if (!req.session.usuario) {
     return res.redirect('/login?returnUrl=/carrito');
   }
 
-  // El id puede venir como :id, :itemId, :idItem (segun como este en la ruta)
   const rawId = req.params.id || req.params.itemId || req.params.idItem;
   const idItem = parseInt(rawId, 10);
 
@@ -299,19 +188,11 @@ const eliminarItem = async (req, res) => {
   }
 
   try {
-    if (typeof apiClient.eliminarItemCarrito === 'function') {
-      await apiClient.eliminarItemCarrito(idItem);
-    } else if (typeof apiClient.eliminarDelCarrito === 'function') {
-      await apiClient.eliminarDelCarrito(idItem);
-    } else {
-      console.error(
-        'No se encontro un metodo de eliminacion en apiClient (eliminarItemCarrito / eliminarDelCarrito).'
-      );
-    }
+    await apiClient.eliminarItemCarrito(idItem);
   } catch (err) {
     console.error(
       'Error al eliminar item del carrito:',
-      err.response?.data || err.message
+      err.message || err
     );
   }
 
@@ -320,84 +201,50 @@ const eliminarItem = async (req, res) => {
 
 // =======================
 // Generar reserva(s) desde el carrito
-// - Crea reservas en la API (estado Pendiente)
-// - Vacía el carrito
-// - Muestra la vista de resumen
 // =======================
 const generarReserva = async (req, res) => {
   if (!req.session.usuario) {
     return res.redirect('/login?returnUrl=/carrito');
   }
 
-  let carritoId = req.session.carritoId || null;
   const usuario = req.session.usuario;
-  const idUsuario =
-    usuario.id ||
-    usuario.IdUsuario ||
-    usuario.idUsuario ||
-    usuario.Id;
+  const idUsuario = getIdUsuarioFromSession(req);
+
+  const nombreUsuario = (
+    (usuario.nombre || usuario.Nombre || usuario.nombres || usuario.Nombres || '') +
+    ' ' +
+    (usuario.apellido || usuario.Apellido || usuario.apellidos || usuario.Apellidos || '')
+  ).trim();
+
+  const correoUsuario =
+    usuario.email ||
+    usuario.Email ||
+    usuario.correo ||
+    usuario.Correo ||
+    null;
 
   try {
-    // 1) Asegurarnos de tener carritoId
-    if (!carritoId && idUsuario) {
-      const dataCarrito = await apiClient.getCarritoPorUsuario(idUsuario);
-      if (dataCarrito) {
-        carritoId =
-          dataCarrito.idCarrito ||
-          dataCarrito.IdCarrito ||
-          null;
+    // Traemos el carrito completo POR USUARIO (ya incluye IdCarrito e Items)
+    const dataCarrito = await apiClient.getCarritoPorUsuario(idUsuario);
 
-        if (carritoId) {
-          req.session.carritoId = carritoId;
-        }
-      }
-    }
+    const items = dataCarrito?.Items || [];
+    const listaItems = Array.isArray(items) ? items : [items];
 
-    if (!carritoId) {
+    if (!listaItems.length) {
       return res.render('carrito/index', {
         titulo: 'Tu carrito',
         items: [],
+        subtotal: 0,
+        iva: 0,
         total: 0,
         error: 'Tu carrito esta vacio.',
-        usuario: req.session.usuario
+        usuario
       });
     }
-
-    // 2) Traer items del carrito
-    const detalle = await apiClient.obtenerDetalleCarrito(carritoId);
-
-    const items = Array.isArray(detalle)
-      ? detalle
-      : detalle.items || detalle.Items || [];
-
-    if (!items.length) {
-      return res.render('carrito/index', {
-        titulo: 'Tu carrito',
-        items: [],
-        total: 0,
-        error: 'Tu carrito esta vacio.',
-        usuario: req.session.usuario
-      });
-    }
-
-    // 3) Datos del usuario
-    const nombreUsuario = (
-      (usuario.nombre || usuario.Nombre || usuario.nombres || usuario.Nombres || '') +
-      ' ' +
-      (usuario.apellido || usuario.Apellido || usuario.apellidos || usuario.Apellidos || '')
-    ).trim();
-
-    const correoUsuario =
-      usuario.email ||
-      usuario.Email ||
-      usuario.correo ||
-      usuario.Correo ||
-      null;
 
     const reservasCreadas = [];
 
-    // 4) Crear una reserva por cada item del carrito
-    for (const it of items) {
+    for (const it of listaItems) {
       const idVehiculo =
         it.IdVehiculo ||
         it.idVehiculo ||
@@ -435,22 +282,23 @@ const generarReserva = async (req, res) => {
       };
 
       try {
-        // OJO: aquí solo “desenvolvemos” lo que devuelve la API,
-        // sin tocar apiClientRest.
+        // Esto asume que en apiClientSoap.js tienes implementado crearReserva → WS_Reserva.CrearReserva
         const rawReserva = await apiClient.crearReserva(reservaDto);
 
         const reservaCreada =
-          rawReserva?.data ||   // { data: { ... } }
+          rawReserva?.data ||
           rawReserva?.reserva ||
           rawReserva?.Reserva ||
-          rawReserva;           // plano { ... }
+          rawReserva;
 
         reservasCreadas.push(reservaCreada);
       } catch (e) {
-        console.error('Error creando reserva para item del carrito:', e.response?.data || e.message);
+        console.error(
+          'Error creando reserva para item del carrito:',
+          e.message || e
+        );
       }
 
-      // Borrar item del carrito
       const idItem =
         it.IdItem ||
         it.idItem ||
@@ -459,39 +307,35 @@ const generarReserva = async (req, res) => {
 
       if (idItem) {
         try {
-          if (typeof apiClient.eliminarItemCarrito === 'function') {
-            await apiClient.eliminarItemCarrito(idItem);
-          } else if (typeof apiClient.eliminarDelCarrito === 'function') {
-            await apiClient.eliminarDelCarrito(idItem);
-          }
+          await apiClient.eliminarItemCarrito(idItem);
         } catch (e) {
-          console.error('Error borrando item del carrito:', e.response?.data || e.message);
+          console.error(
+            'Error borrando item del carrito:',
+            e.message || e
+          );
         }
       }
     }
 
-    // 5) Limpiar carrito en la sesión
+    // Limpiar carrito en sesion
     req.session.carritoId = null;
 
-    // 6) Calcular total con las reservas “planas”
-    const totalReservas = reservasCreadas.reduce((acc, r) => {
-      const t = Number(r.Total ?? r.total ?? 0);
-      return acc + (Number.isNaN(t) ? 0 : t);
-    }, 0);
-
-    // Por ahora, después de generar, te mando a "Mis reservas".
-    // Si quieres, luego lo cambiamos para redirigir al detalle de la última.
+    // Por ahora redirigimos a la lista de reservas
     return res.redirect('/reservas');
-
   } catch (err) {
-    console.error('Error al generar reservas desde el carrito:', err.response?.data || err.message);
+    console.error(
+      'Error al generar reservas desde el carrito:',
+      err.message || err
+    );
 
     return res.status(500).render('carrito/index', {
       titulo: 'Tu carrito',
       items: [],
+      subtotal: 0,
+      iva: 0,
       total: 0,
       error: 'No se pudo generar la reserva.',
-      usuario: req.session.usuario
+      usuario
     });
   }
 };
