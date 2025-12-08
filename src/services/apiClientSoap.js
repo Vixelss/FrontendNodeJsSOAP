@@ -319,6 +319,87 @@ async function cambiarEstadoReserva(idReserva, nuevoEstado) {
   return !!resp?.CambiarEstadoReservaResult;
 }
 
+
+// =======================================
+// Pagos (WS_Pagos) con timeout y logs
+// =======================================
+async function registrarPagoReserva(pago) {
+  const client = await createClient('WS_Pagos');
+
+  const body = {
+    IdReserva: Number(pago.IdReserva),
+    CuentaCliente: Number(pago.CuentaCliente),
+    CuentaComercio: Number(pago.CuentaComercio),
+    Monto: Number(pago.Monto)
+  };
+
+  console.log('[WS_Pagos] Request CrearPago:', body);
+
+  // Promise.race para evitar que se quede colgado infinito
+  const timeoutMs = 15000; // 15 segundos
+  const promSoap = (async () => {
+    let respArr;
+
+    if (typeof client.CrearPagoAsync === 'function') {
+      respArr = await client.CrearPagoAsync({ body });
+    } else if (typeof client.crearPagoAsync === 'function') {
+      respArr = await client.crearPagoAsync({ body });
+    } else if (typeof client.CrearPago === 'function') {
+      // versión sin Async
+      respArr = [await client.CrearPago({ body })];
+    } else {
+      throw new Error('Método SOAP CrearPago no encontrado en WS_Pagos');
+    }
+
+    const resp = respArr[0];
+    console.log('[WS_Pagos] Raw response:', resp);
+
+    const result =
+      resp?.CrearPagoResult ||
+      resp?.crearPagoResult ||
+      resp;
+
+    return {
+      mensaje: result?.Mensaje || '',
+      aprobado: !!result?.Aprobado,
+      respuestaBanco: result?.RespuestaBanco || '',
+      idPago: Number(result?.IdPago || 0)
+    };
+  })();
+
+  const promTimeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Timeout WS_Pagos.CrearPago')), timeoutMs)
+  );
+
+  return Promise.race([promSoap, promTimeout]);
+}
+
+// =======================================
+// PAGOS (WS_Pagos) – leer pagos por reserva
+// =======================================
+async function getPagosPorReserva(idReserva) {
+  try {
+    const client = await createClient('WS_Pagos');
+    const [resp] = await client.ListarPagosPorReservaAsync({ idReserva });
+
+    const nodo = resp?.ListarPagosPorReservaResult;
+    const lista = nodo?.PagoDto || nodo;
+    return toArray(lista);
+  } catch (err) {
+    console.error('Error SOAP getPagosPorReserva:', err.message || err);
+    return [];
+  }
+}
+
+// =======================================
+// RESERVAS – actualizar estado (wrapper)
+// =======================================
+
+// Reutilizamos la función que ya tienes definida arriba
+async function actualizarEstadoReserva(idReserva, nuevoEstado) {
+  return cambiarEstadoReserva(idReserva, nuevoEstado);
+}
+
 // =======================================
 // ADMIN – Vehiculos (CRUD)
 // =======================================
@@ -562,6 +643,12 @@ async function crearFacturaAdmin(factura) {
   return resp?.crearFacturaResult || 0;
 }
 
+// Crear factura desde el flujo de pago (usuario)
+// Alias semántico de crearFacturaAdmin.
+async function crearFacturaDesdeReserva(factura) {
+  return crearFacturaAdmin(factura);
+}
+
 async function actualizarFacturaAdmin(idFactura, factura) {
   const client = await createClient('WS_Factura');
   const payload = { ...factura, IdFactura: idFactura };
@@ -627,6 +714,12 @@ module.exports = {
   getFacturasAdmin,
   getFacturaPorId,
   crearFacturaAdmin,
+  crearFacturaDesdeReserva,
   actualizarFacturaAdmin,
-  eliminarFacturaAdmin
+  eliminarFacturaAdmin,
+  registrarPagoReserva,
+  actualizarEstadoReserva,
+    // pagos
+  getPagosPorReserva,
+
 };

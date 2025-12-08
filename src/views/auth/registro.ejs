@@ -31,10 +31,11 @@
                             type="text"
                             id="nombres"
                             name="nombres"
+                            class="no-space"
                             value="<%= valores.nombres || '' %>"
                             required
-                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ\s]+"
-                            title="Solo letras y espacios.">
+                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ]+"
+                            title="Solo letras, sin espacios.">
                     </label>
 
                     <label class="campo">
@@ -43,10 +44,11 @@
                             type="text"
                             id="apellidos"
                             name="apellidos"
+                            class="no-space"
                             value="<%= valores.apellidos || '' %>"
                             required
-                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ\s]+"
-                            title="Solo letras y espacios.">
+                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ]+"
+                            title="Solo letras, sin espacios.">
                     </label>
                 </div>
 
@@ -56,6 +58,7 @@
                         type="email"
                         id="email"
                         name="email"
+                        class="no-space"
                         required
                         value="<%= valores.email || '' %>"
                         pattern="^[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+\.(com|net|org|ec|es)$"
@@ -68,6 +71,7 @@
                         type="text"
                         id="telefono"
                         name="telefono"
+                        class="no-space"
                         value="<%= valores.telefono || '' %>"
                         required
                         inputmode="numeric"
@@ -144,6 +148,7 @@
                             type="text"
                             name="identificacion"
                             id="identificacion"
+                            class="no-space"
                             required
                             value="<%= valores.identificacion || '' %>">
                         <small id="identificacionHelp" class="texto-ayuda"></small>
@@ -158,6 +163,7 @@
                                 type="password"
                                 name="password"
                                 id="reg-password"
+                                class="no-space"
                                 required
                                 minlength="8">
                             <button type="button" class="btn-toggle-pass" data-target="reg-password">👁</button>
@@ -172,6 +178,7 @@
                                 type="password"
                                 name="confirmarPassword"
                                 id="reg-password2"
+                                class="no-space"
                                 required
                                 minlength="8">
                             <button type="button" class="btn-toggle-pass" data-target="reg-password2">👁</button>
@@ -256,6 +263,20 @@
                 }
             });
         }
+
+        // Bloquear espacios en inputs con clase .no-space
+        (function () {
+          const inputsNoSpace = document.querySelectorAll('input.no-space');
+          inputsNoSpace.forEach(function (input) {
+            input.addEventListener('keydown', function (e) {
+              if (e.key === ' ') e.preventDefault();
+            });
+            input.addEventListener('input', function () {
+              const limpio = this.value.replace(/\s+/g, '');
+              if (this.value !== limpio) this.value = limpio;
+            });
+          });
+        })();
     </script>
 </body>
 </html>

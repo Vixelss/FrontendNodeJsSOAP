@@ -69,19 +69,20 @@
 
           <!-- RESUMEN DE COSTOS -->
           <div class="resumen-totales">
-            <p>
-              Subtotal:
-              <span>$ <%= subtotal.toFixed(2) %></span>
-            </p>
-            <p>
-              IVA (12%):
-              <span>$ <%= iva.toFixed(2) %></span>
-            </p>
-            <p class="total-final">
-              Total a pagar:
-              <span>$ <%= totalConIva.toFixed(2) %></span>
-            </p>
-          </div>
+  <p>
+    Subtotal:
+    <span>$ <%= subtotal.toFixed(2) %></span>
+  </p>
+  <p>
+    TAX (8.875%):
+    <span>$ <%= iva.toFixed(2) %></span>
+  </p>
+  <p class="total-final">
+    Total a pagar:
+    <span>$ <%= totalConIva.toFixed(2) %></span>
+  </p>
+</div>
+
         </section>
 
         <!-- MENSAJES DE PAGO -->
@@ -128,6 +129,14 @@
               <span><%= (infoPago.fecha || '').toString().substring(0,10) %></span>
             </p>
           </section>
+
+          <% if (typeof facturaUrl !== 'undefined' && facturaUrl) { %>
+            <div class="resumen-factura-btn">
+              <a href="<%= facturaUrl %>" target="_blank" class="btn-factura">
+                Ver factura
+              </a>
+            </div>
+          <% } %>
         <% } else { %>
           <!-- FORMULARIO DE PAGO -->
           <div class="resumen-footer">
@@ -139,15 +148,19 @@
               <label for="cedula" class="resumen-label">
                 Cédula del titular de la cuenta MiBanca
               </label>
-              <input
-                type="text"
-                id="cedula"
-                name="cedula"
-                maxlength="10"
-                required
-                class="input-cedula"
-                placeholder="1725985301"
-              />
+<input
+  type="text"
+  id="cedula"
+  name="cedula"
+  maxlength="10"
+  required
+  class="input-cedula"
+  placeholder="1725985301"
+  inputmode="numeric"
+  pattern="^[0-9]{10}$"
+  title="Ingresa solo números, 10 dígitos"
+  oninput="this.value = this.value.replace(/[^0-9]/g, '')"
+/>
               <button type="submit" class="btn-pagar">
                 Proceder al pago
               </button>

@@ -56,8 +56,9 @@
                             name="nombres"
                             type="text"
                             required
-                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ\s]+"
-                            title="Solo letras y espacios."
+                            class="no-space"
+                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ]+"
+                            title="Solo letras, sin espacios."
                             value="<%= u.Nombre || '' %>">
                     </div>
 
@@ -69,8 +70,9 @@
                             name="apellidos"
                             type="text"
                             required
-                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ\s]+"
-                            title="Solo letras y espacios."
+                            class="no-space"
+                            pattern="[A-Za-zÁÉÍÓÚáéíóúÑñ]+"
+                            title="Solo letras, sin espacios."
                             value="<%= u.Apellido || '' %>">
                     </div>
 
@@ -82,6 +84,7 @@
                             name="email"
                             type="email"
                             required
+                            class="no-space"
                             pattern="^[A-Za-z0-9._%+-]+@[A-Za-z]{3,15}\.(com|net|org|ec|es)$"
                             title="Ejemplo: usuario@gmail.com"
                             value="<%= u.Email || '' %>">
@@ -96,13 +99,14 @@
                             type="text"
                             minlength="8"
                             required
+                            class="no-space"
                             value="<%= u.Contrasena || '' %>">
                         <small class="admin-help-text">
                             Mínimo 8 caracteres con mayúsculas, minúsculas y números.
                         </small>
                     </div>
 
-                    <!-- Dirección -->
+                    <!-- Dirección (aquí SÍ se permiten espacios) -->
                     <div class="admin-field">
                         <label for="direccion">Dirección</label>
                         <input
@@ -180,6 +184,7 @@
                             name="identificacion"
                             type="text"
                             required
+                            class="no-space"
                             value="<%= u.Identificacion || '' %>">
                         <small id="identificacionHelp" class="admin-help-text"></small>
                     </div>
@@ -250,6 +255,18 @@
             this.value = this.value.replace(/\D/g, '');
           });
         }
+
+        // ----- Bloquear espacios en inputs con clase .no-space -----
+        const inputsNoSpace = document.querySelectorAll('input.no-space');
+        inputsNoSpace.forEach(function (input) {
+          input.addEventListener('keydown', function (e) {
+            if (e.key === ' ') e.preventDefault();
+          });
+          input.addEventListener('input', function () {
+            const limpio = this.value.replace(/\s+/g, '');
+            if (this.value !== limpio) this.value = limpio;
+          });
+        });
       })();
     </script>
 </body>

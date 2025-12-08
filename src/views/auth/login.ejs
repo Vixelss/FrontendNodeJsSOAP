@@ -24,13 +24,19 @@
 
                 <label class="campo">
                     Correo electrónico
-                    <input type="email" name="email" required>
+                    <input type="email" name="email" class="no-space" required>
                 </label>
 
                 <label class="campo">
                     Contraseña
                     <div class="campo-password">
-                        <input type="password" name="password" id="login-password" required minlength="8">
+                        <input
+                            type="password"
+                            name="password"
+                            id="login-password"
+                            class="no-space"
+                            required
+                            minlength="8">
                         <button type="button" class="btn-toggle-pass" data-target="login-password">👁</button>
                     </div>
                 </label>
@@ -62,6 +68,20 @@
                 btn.textContent = esPassword ? '🙈' : '👁';
             });
         });
+
+        // Bloquear espacios en inputs con clase .no-space
+        (function () {
+          const inputsNoSpace = document.querySelectorAll('input.no-space');
+          inputsNoSpace.forEach(function (input) {
+            input.addEventListener('keydown', function (e) {
+              if (e.key === ' ') e.preventDefault();
+            });
+            input.addEventListener('input', function () {
+              const limpio = this.value.replace(/\s+/g, '');
+              if (this.value !== limpio) this.value = limpio;
+            });
+          });
+        })();
     </script>
 </body>
 </html>

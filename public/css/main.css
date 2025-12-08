@@ -2529,3 +2529,23 @@ input[type=number] {
     padding: 50px 1.5rem;
   }
 }
+
+.btn-factura {
+  display: inline-block;
+  margin-top: 12px;
+  padding: 8px 18px;
+  border-radius: 999px;
+  background-color: #008037;
+  color: #ffffff;
+  text-decoration: none;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.btn-factura:hover {
+  background-color: #00662b;
+}
+
+.resumen-factura-btn {
+  margin-top: 8px;
+}

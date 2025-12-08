@@ -8,8 +8,12 @@ const bancoClient = require('../services/bancoClient');
 function armarModeloReserva(reserva, usuarioSesion) {
   const u = usuarioSesion || {};
 
+  // Subtotal viene del total de la reserva (sin impuesto)
   const subtotal = Number(reserva.Total || reserva.total || 0);
-  const iva = +(subtotal * 0.12).toFixed(2);
+
+  // TAX de New York: 8.875%
+  const taxRate = 0.08875;
+  const iva = +(subtotal * taxRate).toFixed(2);
   const totalConIva = +(subtotal + iva).toFixed(2);
 
   const fIniRaw = reserva.FechaInicio || reserva.fechaInicio;
@@ -24,8 +28,7 @@ function armarModeloReserva(reserva, usuarioSesion) {
     dias = diffDias > 0 ? Math.round(diffDias) : 1;
   }
 
-  const precioDia =
-    dias > 0 ? +(subtotal / dias).toFixed(2) : subtotal;
+  const precioDia = dias > 0 ? +(subtotal / dias).toFixed(2) : subtotal;
 
   const clienteNombre =
     (reserva.NombreUsuario || reserva.nombreUsuario || '').trim() ||
@@ -71,12 +74,13 @@ async function listarMisReservas(req, res) {
 
     const reservasRaw = Array.isArray(data?.data)
       ? data.data
-      : (Array.isArray(data) ? data : []);
+      : Array.isArray(data)
+      ? data
+      : [];
 
-    // infoPagos guarda por sesión la info de pago de cada reserva
     const infoPagos = req.session.infoPagos || {};
 
-    const reservas = reservasRaw.map(r => {
+    const reservas = reservasRaw.map((r) => {
       const id = r.IdReserva || r.idReserva || r.id;
       const pago = infoPagos[String(id)];
       if (pago) {
@@ -89,7 +93,6 @@ async function listarMisReservas(req, res) {
       return r;
     });
 
-    // "flash" de mensaje después de pagar
     const mensaje = req.session.mensajeReservas || null;
     req.session.mensajeReservas = null;
 
@@ -139,30 +142,94 @@ async function verDetalleReserva(req, res) {
 
     const modelo = armarModeloReserva(reserva, req.session.usuario);
 
-    const infoPagos = req.session.infoPagos || {};
-    const infoPago = infoPagos[String(idReserva)] || null;
+    // ================================
+    // 1) Leer info de pago (sesión + WS_Pagos)
+    // ================================
+    let infoPagos = req.session.infoPagos || {};
+    let infoPago = infoPagos[String(idReserva)] || null;
 
-    const estadoReserva = infoPago
-      ? 'Confirmada'
-      : (reserva.Estado || reserva.estado || 'Pendiente');
+    if (!infoPago) {
+      try {
+        const pagos = await apiClient.getPagosPorReserva(idReserva);
+        if (pagos && pagos.length) {
+          const ultimo = pagos[pagos.length - 1];
 
-    if (infoPago) {
-      reserva.Estado = 'Confirmada';
-      reserva.estado = 'Confirmada';
+          infoPago = {
+            transaccionId: ultimo.IdPago || ultimo.idPago || null,
+            cuentaOrigen:
+              ultimo.CuentaCliente ||
+              ultimo.cuentaCliente ||
+              ultimo.cuenta_origen ||
+              null,
+            cuentaDestino:
+              ultimo.CuentaComercio ||
+              ultimo.cuentaComercio ||
+              ultimo.cuenta_destino ||
+              null,
+            monto: Number(ultimo.Monto || ultimo.monto || 0),
+            fecha: ultimo.FechaPago || ultimo.fecha_pago || ultimo.fechaPago || null
+          };
+
+          if (!req.session.infoPagos) req.session.infoPagos = {};
+          req.session.infoPagos[String(idReserva)] = infoPago;
+        }
+      } catch (errPagos) {
+        console.error(
+          'No se pudo recuperar pago desde WS_Pagos:',
+          errPagos.message || errPagos
+        );
+      }
+    }
+
+    const estadoReserva =
+      reserva.Estado ||
+      reserva.estado ||
+      (infoPago ? 'Confirmada' : 'Pendiente');
+
+    // ================================
+    // 2) Intentar obtener la URL de la factura
+    // ================================
+    let facturaUrl = infoPago?.uriFactura || null;
+
+    if (!facturaUrl) {
+      try {
+        const facturas = await apiClient.getFacturasAdmin();
+        const match = facturas.find(
+          (f) => Number(f.IdReserva || f.id_reserva) === Number(idReserva)
+        );
+
+        if (match) {
+          facturaUrl = match.UriFactura || match.uri_factura || null;
+
+          if (facturaUrl) {
+            if (!req.session.infoPagos) req.session.infoPagos = {};
+            if (!req.session.infoPagos[String(idReserva)]) {
+              req.session.infoPagos[String(idReserva)] = {};
+            }
+            req.session.infoPagos[String(idReserva)].uriFactura = facturaUrl;
+          }
+        }
+      } catch (errFacturas) {
+        console.error(
+          'No se pudo recuperar la factura para la reserva:',
+          errFacturas.message || errFacturas
+        );
+      }
     }
 
     return res.render('reservas/detalle', {
       titulo: 'Resumen de tu reserva',
       reserva,
+      precioDia: modelo.precioDia,
       subtotal: modelo.subtotal,
       iva: modelo.iva,
       totalConIva: modelo.totalConIva,
-      precioDia: modelo.precioDia,
       clienteNombre: modelo.clienteNombre,
       clienteCorreo: modelo.clienteCorreo,
       usuario: req.session.usuario,
       estadoReserva,
       infoPago,
+      facturaUrl,
       mensajePago: null,
       errorPago: null
     });
@@ -184,14 +251,13 @@ async function pagarReserva(req, res) {
   }
 
   const idReserva = parseInt(req.params.id, 10);
-  const cedula = (req.body.cedula || '').trim(); // cedula de MiBanca
+  const cedula = (req.body.cedula || '').trim();
 
   if (!idReserva || Number.isNaN(idReserva)) {
     return res.redirect('/reservas');
   }
 
   try {
-    // 1) Traer reserva y armar modelo (para totales)
     const data = await apiClient.getReservaPorId(idReserva);
     const reserva = data?.data || data;
 
@@ -201,13 +267,12 @@ async function pagarReserva(req, res) {
 
     const modelo = armarModeloReserva(reserva, req.session.usuario);
 
-    // Si no enviaron cedula, solo re-pinto el detalle con error
     if (!cedula) {
       const infoPagos = req.session.infoPagos || {};
       const infoPago = infoPagos[String(idReserva)] || null;
       const estadoReserva = infoPago
         ? 'Confirmada'
-        : (reserva.Estado || reserva.estado || 'Pendiente');
+        : reserva.Estado || reserva.estado || 'Pendiente';
 
       return res.render('reservas/detalle', {
         titulo: 'Resumen de tu reserva',
@@ -226,7 +291,7 @@ async function pagarReserva(req, res) {
       });
     }
 
-    // 2) Buscar cuentas del cliente (cedula termina en 01 en tu ejemplo)
+    // 2) Buscar cuentas del cliente en MiBanca
     const cuentasCliente = await bancoClient.obtenerCuentasPorCliente(cedula);
     const listaCliente = Array.isArray(cuentasCliente) ? cuentasCliente : [];
 
@@ -235,7 +300,7 @@ async function pagarReserva(req, res) {
       const infoPago = infoPagos[String(idReserva)] || null;
       const estadoReserva = infoPago
         ? 'Confirmada'
-        : (reserva.Estado || reserva.estado || 'Pendiente');
+        : reserva.Estado || reserva.estado || 'Pendiente';
 
       return res.render('reservas/detalle', {
         titulo: 'Resumen de tu reserva',
@@ -255,13 +320,13 @@ async function pagarReserva(req, res) {
       });
     }
 
-    // Tomamos la primera cuenta del cliente
     const cuentaCli = listaCliente[0];
-    const cuentaOrigen = Number(cuentaCli.cuenta_id); // ¡ojo! cuenta_id, no cedula
+    const cuentaOrigen = Number(cuentaCli.cuenta_id);
 
-    // 3) Buscar la cuenta de la empresa (cedula termina en 02)
-    const cuentasEmpresa =
-      await bancoClient.obtenerCuentasPorCliente(bancoClient.EMPRESA_CEDULA);
+    // 3) Cuenta de la empresa
+    const cuentasEmpresa = await bancoClient.obtenerCuentasPorCliente(
+      bancoClient.EMPRESA_CEDULA
+    );
     const listaEmp = Array.isArray(cuentasEmpresa) ? cuentasEmpresa : [];
 
     if (!listaEmp.length) {
@@ -269,7 +334,7 @@ async function pagarReserva(req, res) {
       const infoPago = infoPagos[String(idReserva)] || null;
       const estadoReserva = infoPago
         ? 'Confirmada'
-        : (reserva.Estado || reserva.estado || 'Pendiente');
+        : reserva.Estado || reserva.estado || 'Pendiente';
 
       return res.render('reservas/detalle', {
         titulo: 'Resumen de tu reserva',
@@ -299,7 +364,73 @@ async function pagarReserva(req, res) {
       tipoTransaccion: `Pago reserva UrbanDrive #${idReserva}`
     });
 
-    // 5) Guardamos info del pago en la sesión
+    // 4.1) Registrar pago en WS_Pagos (BD interna)
+    try {
+      const pagoBody = {
+        IdReserva: idReserva,
+        CuentaCliente: cuentaOrigen,
+        CuentaComercio: cuentaDestino,
+        Monto: modelo.totalConIva
+      };
+
+      console.log('[pagarReserva] Llamando a WS_Pagos.CrearPago...');
+      console.log('[WS_Pagos] Request CrearPago:', pagoBody);
+
+      const pagoResp = await apiClient.registrarPagoReserva(pagoBody);
+      console.log('[WS_Pagos] Respuesta CrearPago:', pagoResp);
+    } catch (errPago) {
+      console.error(
+        'Error registrando pago en WS_RentaAutos:',
+        errPago.message || errPago
+      );
+    }
+
+    // 4.2) Cambiar estado de la reserva a CONFIRMADA
+    try {
+      await apiClient.actualizarEstadoReserva(idReserva, 'Confirmada');
+    } catch (errEstado) {
+      console.error(
+        'Error actualizando estado de reserva en WS_RentaAutos:',
+        errEstado.message || errEstado
+      );
+    }
+
+    // 4.3) Crear FACTURA en el WS (genera PDF + Cloudinary + guarda en SQL)
+    let idFacturaCreada = null;
+    let facturaCreada = null;
+
+    try {
+      const usuarioSesion = req.session.usuario || {};
+      const idUsuario =
+        usuarioSesion.idUsuario ||
+        usuarioSesion.IdUsuario ||
+        usuarioSesion.id ||
+        usuarioSesion.Id ||
+        null;
+
+      const facturaDto = {
+        IdFactura: 0,
+        IdReserva: idReserva,
+        IdUsuario: idUsuario,
+        UriFactura: null,
+        FechaEmision: new Date().toISOString(),
+        ValorTotal: modelo.totalConIva,
+        Descripcion: `Factura reserva #${idReserva} - UrbanDrive NY`
+      };
+
+      idFacturaCreada = await apiClient.crearFacturaDesdeReserva(facturaDto);
+
+      if (idFacturaCreada) {
+        facturaCreada = await apiClient.getFacturaPorId(idFacturaCreada);
+      }
+    } catch (errFactura) {
+      console.error(
+        'Error al crear factura en WS_Factura:',
+        errFactura.message || errFactura
+      );
+    }
+
+    // 5) Guardar info del pago en sesión
     if (!req.session.infoPagos) {
       req.session.infoPagos = {};
     }
@@ -310,13 +441,16 @@ async function pagarReserva(req, res) {
       cuentaDestino,
       monto: modelo.totalConIva,
       fecha: transaccion?.fecha_transaccion || new Date().toISOString(),
-      cedula
+      cedula,
+      idFactura: idFacturaCreada,
+      uriFactura:
+        facturaCreada?.UriFactura ||
+        facturaCreada?.uri_factura ||
+        null
     };
 
-    // Mensaje para la pantalla de "Mis reservas"
     req.session.mensajeReservas = 'Pago realizado correctamente en MiBanca.';
 
-    // 6) Redirigimos a la lista de reservas
     return res.redirect('/reservas');
   } catch (err) {
     console.error(
@@ -324,7 +458,6 @@ async function pagarReserva(req, res) {
       err.response?.data || err.message
     );
 
-    // Intentamos volver a mostrar el detalle con mensaje de error
     try {
       const data = await apiClient.getReservaPorId(idReserva);
       const reserva = data?.data || data;
@@ -334,7 +467,7 @@ async function pagarReserva(req, res) {
       const infoPago = infoPagos[String(idReserva)] || null;
       const estadoReserva = infoPago
         ? 'Confirmada'
-        : (reserva.Estado || reserva.estado || 'Pendiente');
+        : reserva.Estado || reserva.estado || 'Pendiente';
 
       return res.render('reservas/detalle', {
         titulo: 'Resumen de tu reserva',
